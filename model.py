@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
-from transformers import CLIPVisionModel, AutoModelForCausalLM
+from transformers import (
+    CLIPVisionModel, 
+    AutoModelForCausalLM, 
+    AutoTokenizer
+)
 
 
 class VisionEncoder(nn.Module):
@@ -9,16 +13,14 @@ class VisionEncoder(nn.Module):
 
         self._encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
         
-        # freeze by default
-        for param in self._encoder.parameters():
-            param.requires_grad = False
-
     @property
     def hidden_size(self):
         return self._encoder.config.hidden_size
 
+    @torch.no_grad()
     def forward(self, x):
         outputs = self._encoder(x)
+        print(outputs)
         return outputs.last_hidden_state
     
 
@@ -58,7 +60,6 @@ class LLaVAModel(nn.Module):
 
         self.projector = Projector(self.vision_encoder.hidden_size, self.language_model.hidden_size)
         
-
     def forward(self, x):
         pass
 
@@ -66,19 +67,29 @@ class LLaVAModel(nn.Module):
 
 if __name__ == "__main__":
 
-    model = LLaVAModel()
-    # x = torch.randn(1, 3, 224, 224)
+    # model = LLaVAModel()
 
-    # vision_encoder = VisionEncoder()
-    # x = vision_encoder(x) # (1, 257, 1024)
+    # tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
 
-    # language_hidden_size = 768
+    # text = "Hello, how are you?"
 
-    # projector = Projector(vision_encoder.hidden_size, language_hidden_size)
+    # inputs = tokenizer(text, return_tensors="pt")
+
+    # print(inputs)
+    
+
+    x = torch.randn(1, 3, 224, 224)
+
+    vision_encoder = VisionEncoder()
+    x = vision_encoder(x) # (1, 257, 1024)
+
+    language_hidden_size = 768
+
+    projector = Projector(vision_encoder.hidden_size, language_hidden_size)
 
 
-    # x = projector(x)
+    x = projector(x)
 
-    # print(x.shape)
+    print(x.shape)
 
 

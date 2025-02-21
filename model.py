@@ -4,26 +4,35 @@ from transformers import (
     CLIPVisionModel, 
     AutoModelForCausalLM, 
     AutoTokenizer,
+    LlavaProcessor,
     CLIPImageProcessor
 )
+from PIL import Image
+from typing import List, Dict
+from prompt_engine import PromptEngine
+
 
 class ImageProcessor():
-    def __init__(self, vision_encoder_path):
+    """
+    Preprocesses images for the vision encoder. Preprocessing includes croping, resizing and normalizing.
+    """
+    def __init__(self, 
+                 vision_encoder_path, 
+                 device = "cuda"
+                 ) -> None:
         
-        self._processor = CLIPImageProcessor.from_pretrained(vision_encoder_path)
+        self._processor = CLIPImageProcessor.from_pretrained(vision_encoder_path, use_fast=False, device=device)
 
-    def __call__(self, image: torch.Tensor):
+    def __call__(self, 
+                 image: Image.Image,
+                 ) -> torch.Tensor:
+        """
+        Preprocesses an image for the vision encoder.
+
+        Example:
+            Image.Image -> (3, 224, 224)
+        """
         return self._processor.preprocess(image, return_tensors='pt')['pixel_values']
-    
-
-class PromptEngine():
-    def __init__(self, processor, prompt_template):
-        
-        self._processor = processor
-        self.prompt_template = prompt_template
-
-    def __call__(self, visual_tokens, text):
-        return self._processor.apply_template(self.prompt_template, visual_tokens, text)
     
 
 class VisionEncoder(nn.Module):
@@ -68,28 +77,22 @@ class LanguageModel(nn.Module):
         return self._lm(**x)
 
 
-class LLaVAModel(nn.Module):
-    def __init__(self, vision_encoder_path, lm_path, prompt_template):
-        super().__init__()     
+class LLaVAModel:
+    def __init__(self, 
+                 vision_encoder_path, 
+                 lm_path,
+                 device = "cuda"):
 
         self.vision_encoder = VisionEncoder(vision_encoder_path)
         self.language_model = LanguageModel(lm_path)
         self.projector = Projector(self.vision_encoder.hidden_size, self.language_model.hidden_size)
 
-        self.image_processor = ImageProcessor(vision_encoder_path)
-        self.prompt_engine = PromptEngine(lm_path, prompt_template)
 
-    def forward(self, conversation):
-        img, text = conversation
+        self._image_processor = CLIPImageProcessor.from_pretrained(vision_encoder_path, use_fast=False, device=device)
+        self._tokenizer = AutoTokenizer.from_pretrained(lm_path)
 
-        x = self.image_processor(img) # (bsz, 3, 224, 224) -> (bsz, 3, 224, 224)
-        x = self.vision_encoder(x) # (bsz, 3, 224, 224) -> (bsz, num_patches, vision_encoder.hidden_size)
-        visual_tokens = self.projector(x) # (bsz, num_patches, vision_encoder.hidden_size) -> (bsz, num_patches, language_model.hidden_size)
+        self.processor = LlavaProcessor(self._image_processor, self._tokenizer)
 
-        text_prompt = self.prompt_engine(visual_tokens, text)
-
-        out = self.language_model(text_prompt)
-        return out
 
 def dummy_data(bsz = 1, img_size = 224):
     dummy_img = torch.randn((bsz, 3, img_size, img_size), dtype=torch.float32).uniform_(0, 1)
@@ -103,33 +106,27 @@ if __name__ == "__main__":
     lm_path = "Qwen/Qwen2-0.5B"
     vision_encoder_path = "openai/clip-vit-large-patch14"
 
-    model = LLaVAModel(vision_encoder_path, lm_path, prompt_template)
+    model = LLaVAModel(vision_encoder_path, lm_path)
 
-    # tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "url": "https://www.ilankelman.org/stopsigns/australia.jpg"},
+                {"type": "text", "text": "What is shown in this image?"},
+            ],
+        },
+    ]
 
-    # text = "Hello, how are you?"
+    inputs = model.processor.apply_chat_template(
+        conversation,
+        chat_template=prompt_template,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt"
+    )
 
-    # inputs = tokenizer(text, return_tensors="pt")
+    print(inputs)
 
-    # print(inputs)
-    
-
-    # x = torch.randn(1, 3, 224, 224)
-
-    # vision_encoder = VisionEncoder()
-    # x = vision_encoder(x) # (1, 257, 1024)
-
-    # language_hidden_size = 768
-
-    # projector = Projector(vision_encoder.hidden_size, language_hidden_size)
-
-
-    # x = projector(x)
-
-    # print(x.shape)
-
-    conversation = dummy_data()
-
-    out = model(conversation)
-    print(out.logits)
-    print(out.logits.shape)
+    print(model.processor.tokenizer.decode(inputs['input_ids'][0]))
